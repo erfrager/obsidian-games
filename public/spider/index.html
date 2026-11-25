@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>OBSIDIAN Spider</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none}
+html,body{margin:0;height:100%;background:#0a0e18;color:#e9e2cf;font-family:system-ui,-apple-system,"Segoe UI",Roboto,Tahoma,sans-serif;overscroll-behavior:none;overflow:hidden;touch-action:manipulation}
+#app{display:flex;flex-direction:column;height:100vh;height:100dvh;background:radial-gradient(ellipse at top,#16223a 0%,#0a0e18 70%)}
+#top{display:flex;justify-content:space-around;padding:6px 4px;border-bottom:1px solid #2b3550;background:rgba(0,0,0,.3)}
+.stat{text-align:center;line-height:1.2}
+.stat b{display:block;font-size:16px;color:#e0b84e}
+.stat span{font-size:10px;color:#9fb0cc}
+#board{flex:1;position:relative;direction:ltr;margin-top:6px;min-height:0}
+.col{position:absolute;top:0;height:100%}
+.slot{position:absolute;left:0;top:0;width:100%;border:1px dashed #3a4a6b;border-radius:5px;background:rgba(255,255,255,.03)}
+.card{position:absolute;left:0;width:100%;border-radius:5px;background:linear-gradient(#f7f0de,#e9dfc6);border:1px solid #3a2a18;color:#1b1b1f;font-weight:700;display:flex;align-items:flex-start;gap:1px;padding:2px;line-height:1;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.5)}
+.card i{font-style:normal;font-size:.9em}
+.card.down{background:repeating-linear-gradient(45deg,#7b1e1e 0 4px,#5a1212 4px 8px);border-color:#c9a24a}
+.card.sel{border-color:#ffd24a;box-shadow:0 0 0 2px #ffd24a,0 4px 8px rgba(0,0,0,.6);transform:translateY(-3px)}
+.col.ok>:last-child{box-shadow:0 0 0 2px #4fe08a}
+.card.hint,.col.hintdest>:last-child{animation:pulse .6s ease-in-out infinite alternate}
+@keyframes pulse{from{box-shadow:0 0 0 2px #5ab8ff}to{box-shadow:0 0 0 4px #5ab8ff}}
+#bar{display:flex;gap:6px;padding:8px 6px calc(8px + env(safe-area-inset-bottom));background:rgba(0,0,0,.3);border-top:1px solid #2b3550}
+#bar button{flex:1;padding:10px 2px;font-size:13px;font-family:inherit;color:#e9e2cf;background:#1c2742;border:1px solid #3a4a6b;border-radius:8px}
+#bar button:active{background:#2a3a62}
+#bar button:disabled{opacity:.4}
+#toast{position:fixed;left:50%;bottom:76px;transform:translateX(-50%);background:rgba(0,0,0,.85);color:#fff;padding:8px 14px;border-radius:8px;font-size:13px;opacity:0;transition:opacity .25s;pointer-events:none;white-space:nowrap}
+#toast.show{opacity:1}
+#modal{position:fixed;inset:0;background:rgba(0,0,0,.7);display:none;align-items:center;justify-content:center;padding:20px}
+#modal.show{display:flex}
+#box{background:#16223a;border:2px solid #e0b84e;border-radius:14px;padding:20px;text-align:center;max-width:320px;width:100%}
+#box h2{margin:0 0 10px;color:#e0b84e}
+#box p{margin:6px 0 14px;line-height:1.7}
+#box button{margin:4px;padding:10px 18px;font-size:14px;font-family:inherit;border-radius:8px;border:1px solid #e0b84e;background:#e0b84e;color:#111;font-weight:700}
+#box button.alt{background:transparent;color:#e0b84e}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="top">
+    <div class="stat"><b id="sMoves">0</b><span>حرکت</span></div>
+    <div class="stat"><b id="sTime">0:00</b><span>زمان</span></div>
+    <div class="stat"><b id="sRuns">0/8</b><span>ردیف کامل</span></div>
+    <div class="stat"><b id="sScore">0</b><span>امتیاز</span></div>
+  </div>
+  <div id="board"></div>
+  <div id="bar">
+    <button id="bUndo">↩ بازگشت</button>
+    <button id="bHint">💡 راهنما</button>
+    <button id="bDeal">🃏 پخش</button>
+    <button id="bNew">🔄 جدید</button>
+  </div>
+  <div id="toast"></div>
+  <div id="modal"><div id="box"></div></div>
+</div>
+<script>
+(function () {
+  var RANKS = ['', 'A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
+  var q = new URLSearchParams(location.search);
+  var P = { u: q.get('u'), w: q.get('w'), s: q.get('s') };
+  var cols, stock, runs, moves, history, sel, hint, startTime, timerId, won, finalSec, lastSent;
+  var board = document.getElementById('board');
+  function $(id) { return document.getElementById(id); }
+
+  function newGame() {
+    var deck = [];
+    for (var k = 0; k < 8; k++) for (var r = 1; r <= 13; r++) deck.push(r);
+    for (var i = deck.length - 1; i > 0; i--) {
+      var j = Math.floor(Math.random() * (i + 1));
+      var t = deck[i]; deck[i] = deck[j]; deck[j] = t;
+    }
+    cols = [];
+    var p = 0;
+    for (var c = 0; c < 10; c++) {
+      var n = c < 4 ? 6 : 5, col = [];
+      for (var x = 0; x < n; x++) col.push({ r: deck[p++], up: x === n - 1 });
+      cols.push(col);
+    }
+    stock = deck.slice(p);
+    runs = 0; moves = 0; history = []; sel = null; hint = null;
+    won = false; finalSec = 0; lastSent = 0; startTime = 0;
+    clearInterval(timerId);
+    render();
+  }
+
+  function elapsed() {
+    if (won) return finalSec;
+    return startTime ? Math.floor((Date.now() - startTime) / 1000) : 0;
+  }
+  function fmt(s) { return Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2); }
+  function calcScore() {
+    var s = runs * 100;
+    if (won) s += Math.max(0, 500 - moves - Math.floor(finalSec / 15));
+    return s;
+  }
+  function updateTop() {
+    $('sMoves').textContent = moves;
+    $('sTime').textContent = fmt(elapsed());
+    $('sRuns').textContent = runs + '/8';
+    $('sScore').textContent = calcScore();
+    $('bDeal').textContent = '🃏 پخش (' + (stock.length / 10) + ')';
+    $('bDeal').disabled = stock.length === 0;
+  }
+  function startIfNeeded() {
+    if (!startTime) { startTime = Date.now(); timerId = setInterval(updateTop, 1000); }
+  }
+  function toast(msg) {
+    var t = $('toast');
+    t.textContent = msg; t.classList.add('show');
+    clearTimeout(toast.h);
+    toast.h = setTimeout(function () { t.classList.remove('show'); }, 1600);
+  }
+  function snapshot() {
+    history.push(JSON.stringify({ cols: cols, stock: stock, runs: runs }));
+    if (history.length > 300) history.shift();
+  }
+
+  function isStart(c, i) {
+    var col = cols[c];
+    if (i < 0 || i >= col.length || !col[i].up) return false;
+    for (var j = i; j < col.length - 1; j++) if (col[j].r !== col[j + 1].r + 1) return false;
+    return true;
+  }
+  function canDrop(c, i, d) {
+    if (c === d) return false;
+    var dest = cols[d];
+    if (!dest.length) return true;
+    return dest[dest.length - 1].r === cols[c][i].r + 1;
+  }
+  function flip(c) {
+    var col = cols[c];
+    if (col.length && !col[col.length - 1].up) col[col.length - 1].up = true;
+  }
+  function checkRuns() {
+    var got = false;
+    for (var c = 0; c < 10; c++) {
+      var col = cols[c];
+      while (col.length >= 13) {
+        var tail = col.slice(-13), ok = true;
+        for (var k = 0; k < 13; k++) if (!tail[k].up || tail[k].r !== 13 - k) { ok = false; break; }
+        if (!ok) break;
+        col.splice(-13); runs++; got = true; flip(c);
+      }
+    }
+    if (runs === 8 && !won) {
+      won = true; finalSec = elapsed(); clearInterval(timerId);
+      submit(calcScore());
+      setTimeout(showWin, 400);
+    } else if (got) {
+      submit(calcScore());
+      toast('یک ردیف کامل شد! 🎉');
+    }
+  }
+  function move(c, i, d) {
+    startIfNeeded(); snapshot();
+    var seq = cols[c].splice(i);
+    for (var k = 0; k < seq.length; k++) cols[d].push(seq[k]);
+    flip(c); moves++; sel = null; hint = null;
+    checkRuns(); render();
+  }
+  function deal() {
+    if (won) return;
+    if (!stock.length) { toast('کارتی برای پخش نمونده'); return; }
+    startIfNeeded(); snapshot();
+    for (var c = 0; c < 10; c++) cols[c].push({ r: stock.pop(), up: true });
+    moves++; sel = null; hint = null;
+    checkRuns(); render();
+  }
+  function undo() {
+    if (won) return;
+    if (!history.length) { toast('چیزی برای برگشت نیست'); return; }
+    var s = JSON.parse(history.pop());
+    cols = s.cols; stock = s.stock; runs = s.runs;
+    moves++; sel = null; hint = null; render();
+  }
+
+  function findHint() {
+    var best = null, bs = -1;
+    for (var c = 0; c < 10; c++) {
+      var col = cols[c];
+      for (var i = 0; i < col.length; i++) {
+        if (!isStart(c, i)) continue;
+        if (i > 0 && col[i - 1].up && col[i - 1].r === col[i].r + 1) continue;
+        for (var d = 0; d < 10; d++) {
+          if (!canDrop(c, i, d)) continue;
+          var dest = cols[d];
+          if (!dest.length && i === 0) continue;
+          var s = 1;
+          if (i > 0 && !col[i - 1].up) s += 10;
+          if (dest.length) s += 5 + (col.length - i);
+          if (i === 0 && dest.length) s += 3;
+          if (s > bs) { bs = s; best = { c: c, i: i, d: d }; }
+        }
+      }
+    }
+    return best;
+  }
+  function showHint() {
+    if (won) return;
+    var h = findHint();
+    if (!h) { toast(stock.length ? 'حرکتی نیست؛ کارت جدید پخش کن 🃏' : 'حرکتی نمونده 😕'); return; }
+    sel = null; hint = h; render();
+    clearTimeout(showHint.h);
+    showHint.h = setTimeout(function () { hint = null; render(); }, 2000);
+  }
+
+  function tap(c, i) {
+    if (won) return;
+    hint = null;
+    if (sel) {
+      if (sel.c === c) {
+        var same = (i === sel.i);
+        sel = null;
+        if (!same && isStart(c, i)) sel = { c: c, i: i };
+        render(); return;
+      }
+      if (canDrop(sel.c, sel.i, c)) { move(sel.c, sel.i, c); return; }
+      if (i >= 0 && isStart(c, i)) { sel = { c: c, i: i }; render(); return; }
+      sel = null; render(); toast('این حرکت ممکن نیست');
+      return;
+    }
+    if (i >= 0 && isStart(c, i)) { sel = { c: c, i: i }; render(); }
+    else if (i >= 0 && cols[c][i].up) toast('این کارت‌ها پشت‌سرهم نیستن');
+  }
+
+  function render() {
+    var W = board.clientWidth, H = board.clientHeight;
+    var gap = 3, pad = 4;
+    var cw = Math.floor((W - pad * 2 - gap * 9) / 10);
+    var ch = Math.round(cw * 1.45);
+    var fs = Math.max(10, Math.min(17, Math.round(cw * 0.4)));
+    board.innerHTML = '';
+    for (var c = 0; c < 10; c++) {
+      var colEl = document.createElement('div');
+      colEl.className = 'col';
+      colEl.style.left = (pad + c * (cw + gap)) + 'px';
+      colEl.style.width = cw + 'px';
+      colEl.dataset.c = c;
+      if (sel && canDrop(sel.c, sel.i, c)) colEl.classList.add('ok');
+      if (hint && hint.d === c) colEl.classList.add('hintdest');
+      var slot = document.createElement('div');
+      slot.className = 'slot'; slot.style.height = ch + 'px';
+      colEl.appendChild(slot);
+      var col = cols[c], nd = 0;
+      for (var a = 0; a < col.length; a++) if (!col[a].up) nd++;
+      var nu = col.length - nd;
+      var dd = Math.max(5, Math.round(cw * 0.22));
+      var du = Math.max(Math.round(fs * 1.35), Math.round(cw * 0.55));
+      var need = nd * dd + Math.max(0, nu - 1) * du + ch, avail = H - 6;
+      if (need > avail) {
+        var f = (avail - ch) / (need - ch);
+        dd = Math.max(4, dd * f);
+        du = Math.max(Math.round(fs * 1.25), du * f);
+      }
+      var y = 0;
+      for (var i = 0; i < col.length; i++) {
+        var cd = col[i], el = document.createElement('div');
+        el.className = 'card' + (cd.up ? '' : ' down');
+        el.style.top = y + 'px'; el.style.height = ch + 'px'; el.style.fontSize = fs + 'px';
+        el.dataset.i = i;
+        if (cd.up) el.innerHTML = '<span>' + RANKS[cd.r] + '</span><i>♠</i>';
+        if (sel && sel.c === c && i >= sel.i) el.classList.add('sel');
+        if (hint && hint.c === c && i >= hint.i) el.classList.add('hint');
+        colEl.appendChild(el);
+        y += cd.up ? du : dd;
+      }
+      board.appendChild(colEl);
+    }
+    updateTop();
+  }
+
+  function submit(score) {
+    if (!P.u || !P.w || !P.s || score <= lastSent) return;
+    lastSent = score;
+    fetch('/score', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ u: P.u, w: P.w, s: P.s, score: score })
+    }).catch(function () {});
+  }
+
+  function modal(html, buttons) {
+    var box = $('box');
+    box.innerHTML = html;
+    buttons.forEach(function (b) {
+      var btn = document.createElement('button');
+      btn.textContent = b.t;
+      if (b.alt) btn.className = 'alt';
+      btn.onclick = function () { $('modal').classList.remove('show'); if (b.f) b.f(); };
+      box.appendChild(btn);
+    });
+    $('modal').classList.add('show');
+  }
+  function showWin() {
+    modal('<h2>🏆 پیروز شدی!</h2><p>امتیاز: <b>' + calcScore() + '</b><br>حرکت: ' + moves +
+      ' | زمان: ' + fmt(finalSec) + '<br>امتیازت توی جدول گروه ثبت شد.</p>',
+      [{ t: 'بازی جدید', f: newGame }, { t: 'بستن', alt: true }]);
+  }
+  function askNew() {
+    if (!moves || won) { newGame(); return; }
+    modal('<h2>بازی جدید؟</h2><p>پیشرفت فعلی از بین می‌ره.</p>',
+      [{ t: 'بله', f: newGame }, { t: 'نه', alt: true }]);
+  }
+
+  board.addEventListener('click', function (e) {
+    var colEl = e.target.closest('.col');
+    if (!colEl) return;
+    var cardEl = e.target.closest('.card');
+    tap(+colEl.dataset.c, cardEl ? +cardEl.dataset.i : -1);
+  });
+  $('bUndo').onclick = undo;
+  $('bHint').onclick = showHint;
+  $('bDeal').onclick = deal;
+  $('bNew').onclick = askNew;
+  window.addEventListener('resize', render);
+
+  newGame();
+})();
+</script>
+</body>
+  </html>
